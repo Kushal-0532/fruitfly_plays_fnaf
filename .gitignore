@@ -1,0 +1,5 @@
+*.md
+specs/
+__pycache__/
+data/
+logs/
