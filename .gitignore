@@ -3,3 +3,12 @@ specs/
 __pycache__/
 data/
 logs/
+.arena/
+!README.md
+!RUNBOOK.md
+.env
+.portal_token
+calibration.json
+calibration.json.bak
+other_approach_repo/
+replay/

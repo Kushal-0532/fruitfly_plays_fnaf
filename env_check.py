@@ -1,14 +1,34 @@
-"""Phase 01 smoke test: imports, versions, session type, xdotool."""
+"""Phase 01 env check: python version, packages, tools, session type, weights. Exit 0 iff hard checks pass."""
+import importlib
 import os
-import shutil
 import subprocess
+import sys
+from pathlib import Path
 
-import torch
-import flyvis
+ROOT = Path(__file__).resolve().parent
+ok = True
 
-print("torch", torch.__version__, "cuda", torch.cuda.is_available())
-print("flyvis", flyvis.__version__, flyvis.__file__)
+
+def report(name, passed, detail="", hard=True):
+    global ok
+    ok &= passed or not hard
+    print(f"{'OK' if passed else ('FAIL' if hard else 'WARN')}  {name} {detail}")
+
+
+report("python 3.11", sys.version_info[:2] == (3, 11), sys.version.split()[0])
+for mod in ["flyvis", "torch", "PIL", "dbus_next", "numpy", "scipy", "sklearn"]:
+    try:
+        m = importlib.import_module(mod)
+        report(f"import {mod}", True, getattr(m, "__version__", ""))
+    except Exception as e:
+        report(f"import {mod}", False, repr(e))
+for name, cmd in [("xdotool", ["xdotool", "--version"]), ("pw-record", ["pw-record", "--version"]),
+                  ("python3-gi", ["/usr/bin/python3", "-c", "import gi"])]:
+    try:
+        report(name, subprocess.run(cmd, capture_output=True).returncode == 0)
+    except FileNotFoundError:
+        report(name, False, "missing")
 sess = os.environ.get("XDG_SESSION_TYPE", "?")
-print("session", sess, "" if sess == "x11" else "<-- WARN: wayland: capture via portal, xdotool via Xwayland")
-xd = shutil.which("xdotool")
-print("xdotool", subprocess.run([xd, "--version"], capture_output=True, text=True).stdout.strip() if xd else "MISSING: sudo apt install xdotool")
+report("session", sess != "wayland", sess, hard=False)
+report("flyvis weights", (ROOT / "data/results/flow/0000/000").exists())
+sys.exit(0 if ok else 1)

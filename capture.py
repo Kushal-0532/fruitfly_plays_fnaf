@@ -1,4 +1,4 @@
-"""Phase 02: grab frames of the UCN window on GNOME Wayland.
+"""Grab frames of the FNaF 1 window on GNOME Wayland.
 
 xdg-desktop-portal ScreenCast (dbus-next) -> PipeWire node -> gst_pipe.py
 (system python, GStreamer) -> raw RGB frames on a pipe -> numpy.
@@ -16,29 +16,54 @@ import time
 from pathlib import Path
 
 import numpy as np
+
+import config
 from dbus_next import Message, Variant
 from dbus_next.aio import MessageBus
 
 SCALE = 2  # ponytail: capture at 1/2 res; perception downsamples far more anyway
-FPS = 10
+FPS = config.FPS
 TOKEN_FILE = Path(__file__).with_name(".portal_token")
 PORTAL = "org.freedesktop.portal.Desktop"
 PORTAL_PATH = "/org/freedesktop/portal/desktop"
 
 
-def find_window(name="Ultimate Custom Night"):
-    """-> (wid, x, y, w, h). Falls back to full display if not found."""
-    wids = subprocess.run(["xdotool", "search", "--name", name], capture_output=True, text=True).stdout.split()
-    if not wids:
-        w, h = map(int, subprocess.run(["xdotool", "getdisplaygeometry"], capture_output=True, text=True).stdout.split())
-        return None, 0, 0, w, h
-    g = dict(l.split("=") for l in subprocess.run(
-        ["xdotool", "getwindowgeometry", "--shell", wids[0]], capture_output=True, text=True).stdout.split())
-    return int(wids[0]), int(g["X"]), int(g["Y"]), int(g["WIDTH"]), int(g["HEIGHT"])
+_run = subprocess.run  # indirection so tests can inject a FakeRunner
+
+
+def _out(*argv):
+    return _run(list(argv), capture_output=True, text=True).stdout
+
+
+def find_window(names=None):
+    """-> (wid, x, y, w, h) of the first window matching any candidate title.
+    Falls back to the full display (wid None) if none match."""
+    for name in names or config.WINDOW_TITLE_CANDIDATES:
+        wids = _out("xdotool", "search", "--name", name).split()
+        if wids:
+            g = dict(l.split("=") for l in _out("xdotool", "getwindowgeometry", "--shell", wids[0]).split())
+            return int(wids[0]), int(g["X"]), int(g["Y"]), int(g["WIDTH"]), int(g["HEIGHT"])
+    # ponytail: xdotool --name regex misses the Wine window; fall back to substring match on the listing
+    for wid, title in list_windows():
+        if any(n.lower() in title.lower() for n in names or config.WINDOW_TITLE_CANDIDATES):
+            g = dict(l.split("=") for l in _out("xdotool", "getwindowgeometry", "--shell", str(wid)).split())
+            return wid, int(g["X"]), int(g["Y"]), int(g["WIDTH"]), int(g["HEIGHT"])
+    w, h = display_size()
+    return None, 0, 0, w, h
+
+
+def list_windows():
+    """-> [(wid, title)] for every X window with a non-empty name."""
+    out = []
+    for wid in _out("xdotool", "search", "--name", "").split():
+        title = _out("xdotool", "getwindowname", wid).strip()
+        if title:
+            out.append((int(wid), title))
+    return out
 
 
 def display_size():
-    return tuple(map(int, subprocess.run(["xdotool", "getdisplaygeometry"], capture_output=True, text=True).stdout.split()))
+    return tuple(map(int, _out("xdotool", "getdisplaygeometry").split()))
 
 
 async def _portal_session():
@@ -147,6 +172,8 @@ class Capture:
 
 if __name__ == "__main__":
     from PIL import Image
+    for wid, title in list_windows():
+        print(wid, title)
     cap = Capture()
     print("window", cap.wid, "region", cap.region, "stream", cap.w, cap.h)
     f = cap.grab()
