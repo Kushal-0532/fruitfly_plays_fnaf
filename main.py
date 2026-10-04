@@ -149,6 +149,8 @@ def main(argv=None):
     ap.add_argument("--shadow", action="store_true", help="also score hallway bursts with the fly model (logged, never used)")
     ap.add_argument("--record", metavar="NAME", help="also save every frame to data/corpus/NAME (for labeling Chica/Foxy later)")
     ap.add_argument("--collect-cove", action="store_true", help="phase 33: flip to cam 1C rarely so Foxy leaves the cove (recording data)")
+    ap.add_argument("--policy", choices=("supervisor", "readout"), default="supervisor",
+                    help="who takes the door decisions: the supervisor rules (default) or the trained fly readout (phase 43)")
     a = ap.parse_args(argv)
     from actuator import Actuator
     from capture import SCALE, Capture, find_window
@@ -200,7 +202,7 @@ def main(argv=None):
     rec = None
     try:
         rec = LiveRecorder(Path(config.CORPUS_DIR) / a.record) if a.record else None
-        summary = run(cap, live_reader(geom, buttons, hallway), Actuator(cap.wid, geom, buttons), StateTracker(assume_open=True), Supervisor(pm, night=a.night),
+        summary = run(cap, live_reader(geom, buttons, hallway), Actuator(cap.wid, geom, buttons), StateTracker(assume_open=True), (Supervisor if a.policy == "supervisor" else __import__("readout_policy").ReadoutPolicy)(pm, night=a.night),
                       Guards(dry_cfg if a.dry_run else None, stop_path=out / "STOP"), out / f"run_{ts}.jsonl", a.night, dry_run=a.dry_run,
                       max_seconds=a.max_seconds, safe_dir=out / f"safe_{ts}", shadow=shadow, viz=viz, recorder=rec)
     finally:

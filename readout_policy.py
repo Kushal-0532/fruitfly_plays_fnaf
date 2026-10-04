@@ -54,6 +54,8 @@ class ReadoutPolicy(Supervisor):
                     self.conf[key] = 1.0
                 elif self.run[key][1] >= n_lo:
                     self.conf[key] = 0.0
+            if v is None:                                # sighting went stale (STALE_S): live run 2026-10-04 held the door shut all night on one cove frame
+                self.conf[key] = 0.0
         closed = [float(bool(s.door_closed[x])) for x in "LR"]
         tcl = [0.0 if self.closed_t[x] is None else min(t - self.closed_t[x], 30.0) / TCLOSED_S for x in "LR"]
         v = lambda x: 0.0 if x is None else float(x)
