@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 import config
 from scripts.audit_decisions import audit
-from actions import Action
+from actions import Action, Decision
 from policy import Supervisor
 from power import PowerModel
 from state import Readings, StateTracker
@@ -224,21 +224,43 @@ class Night:
                         hall={s: self.danger(s) for s in "LR"}, cove=self.cove_obs(), cam4b=self.cam4b_obs())
 
 
-def play(params=None, seed=0, noise=None, max_s=None, disable_doors=False, quiet=False, night=2, flips=True):
-    """-> dict(result, cause, death_t, t, hour, power, actions, audit). result/cause is '6am' or a death cause."""
+def play(params=None, seed=0, noise=None, max_s=None, disable_doors=False, quiet=False, night=2, flips=True, policy="supervisor", trace=None, weights=None):
+    """-> dict(result, cause, death_t, t, hour, power, actions, audit). result/cause is '6am' or a death cause.
+    policy="readout": ReadoutPolicy door decisions vetted by safety.Guards (guard_overrides counts SAFE_MODE / rate-limit overrides).
+    weights: readout W override (ES), default = the saved file.
+    trace (list): appends (state, t, decision, true door state) per step, the imitation data for readout_policy.fit_imitation."""
     params = params or Params()
     n = Night(seed, noise, night, quiet)
-    tracker, sup = StateTracker(assume_open=True), Supervisor(PowerModel(), params.cfg(), night=night if flips else None)
-    n_act, limit, rows = 0, (max_s or (6 * config.HOUR_S + 1)), []
+    tracker = StateTracker(assume_open=True)
+    if policy == "readout":
+        from readout_policy import ReadoutPolicy
+        from safety import Guards
+        sup, guards = ReadoutPolicy(PowerModel(), params.cfg(), night=night if flips else None, weights=weights), Guards(stop_path="/nonexistent/STOP")
+    else:
+        sup, guards = Supervisor(PowerModel(), params.cfg(), night=night if flips else None), None
+    n_act, jam_rule, limit, rows = 0, 0, (max_s or (6 * config.HOUR_S + 1)), []
     while not n.dead and n.t < limit:
         r = n.readings()
         s = tracker.update(r, got_frame=True)
         sup.pm.observe(n.t, s.power_pct, s.usage)
         d = sup.decide(s, n.t)
-        rows.append({"t": n.t, "action": d.action, "reason": d.reason})
+        row = {"t": n.t, "action": d.action, "reason": d.reason}
+        if trace is not None:
+            trace.append((s, n.t, d, dict(n.door)))
+        if guards:
+            side = guards.pending and guards.pending.kind in (Action.DOOR_L, Action.DOOR_R) and guards.pending.kind.name[-1]
+            v = guards.vet(s, d, n.t)
+            if v.reason == "click_not_taken" and side:  # jam rule (F24/F25): a door click that never lands = jammed door; stop clicking it, never raise the monitor
+                sup.jammed[side], jam_rule, v = True, jam_rule + 1, Decision(Action.NONE, None, "jam_" + side)
+                guards.reset()
+            row["guard"] = (v.action, v.reason) != (d.action, d.reason)
+            d = v  # row keeps the policy's own decision: retry_N / SAFE_MODE are the guard's, counted in guard_overrides
+        rows.append(row)
         if d.action in (Action.DOOR_L, Action.DOOR_R) and disable_doors:
             d = type(d)(Action.NONE, None, "doors_disabled")
         if d.action not in (Action.NONE, Action.SAFE_MODE):
+            if guards:
+                guards.expect(d, n.t)
             n.apply(d.action, ACT_S if d.action != Action.CAM else 0.5, d.arg)
             sup.last_action_t = n.t
             n_act += 1
@@ -246,16 +268,20 @@ def play(params=None, seed=0, noise=None, max_s=None, disable_doors=False, quiet
             n.step()
     res = n.dead or ("6am" if n.hour() >= 6 else "timeout")
     return {"result": res, "cause": res, "death_t": n.death_t, "t": round(n.t, 1), "hour": n.hour(), "power": round(n.power, 1),
-            "actions": n_act, "audit": audit(rows)}
+            "actions": n_act, "audit": audit(rows), "safe": guards.latched if guards else None, "jam_rule": jam_rule}
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--night", type=int, default=2)
     ap.add_argument("--seeds", type=int, default=200)
+    ap.add_argument("--policy", default="supervisor", choices=["supervisor", "readout"])
     a = ap.parse_args(argv)
-    rs = [play(seed=s, night=a.night) for s in range(a.seeds)]
-    print(f"night {a.night}, default policy, {a.seeds} seeds:", dict(Counter(r["cause"] for r in rs).most_common()))
+    rs = [play(seed=s, night=a.night, policy=a.policy) for s in range(a.seeds)]
+    print(f"night {a.night}, {a.policy} policy, {a.seeds} seeds:", dict(Counter(r["cause"] for r in rs).most_common()))
+    if a.policy == "readout":
+        print("guards latched SAFE_MODE:", dict(Counter(r["safe"] for r in rs)), "| runs where the jam rule fired (click never landed):", sum(bool(r["jam_rule"]) for r in rs))
+    print("audit violations:", sum(len(r["audit"]["violations"]) for r in rs), "guard overrides:", sum(r["audit"]["guard_overrides"] for r in rs))
     dt = [r["death_t"] for r in rs if r["death_t"]]
     print("median death t:", round(statistics.median(dt), 1) if dt else None)
 

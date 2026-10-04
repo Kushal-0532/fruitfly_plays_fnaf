@@ -20,7 +20,7 @@ def seen_clear(s, t):
 
 
 def test_night1_never_flips():
-    s, c = sup(night=1)
+    s, c = sup(night=1, STALL_FROM_NIGHT=2)  # config now stalls from night 1 (phase 38 fix)
     for k in range(3000):
         t = k * 0.1
         seen_clear(s, t) if k % 50 == 0 else None

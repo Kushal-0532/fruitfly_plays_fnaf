@@ -3,6 +3,7 @@ import json
 import sys
 
 from policy import FLY_DOOR_REASONS
+from readout_policy import READOUT_REASONS  # SPEC D12 extension (phase 40)
 
 DOORS = ("DOOR_L", "DOOR_R")
 
@@ -18,7 +19,7 @@ def audit(rows):
             continue
         n += 1
         by[r["reason"]] = by.get(r["reason"], 0) + 1
-        if r["reason"] not in FLY_DOOR_REASONS:
+        if r["reason"] not in FLY_DOOR_REASONS | READOUT_REASONS:
             bad.append((r.get("t"), a, r["reason"]))
     return {"door_actions": n, "by_reason": by, "violations": bad, "guard_overrides": guards}
 
