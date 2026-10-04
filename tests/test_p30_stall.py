@@ -70,3 +70,10 @@ def test_sim_flips_cut_foxy_deaths_by_half():
     on = sum(sim_env.play(seed=s)["cause"] == "foxy" for s in seeds)
     off = sum(sim_env.play(seed=s, flips=False)["cause"] == "foxy" for s in seeds)
     assert on <= off / 2, (on, off)
+
+
+def test_no_new_hall_check_while_a_light_is_on():
+    s, _ = sup()
+    for t in range(0, 40):
+        d = s.decide(make_state(t=float(t), light_on={"L": True, "R": False}, hall={"L": 0.05, "R": None}), float(t))
+        assert d.reason != "hall_check"

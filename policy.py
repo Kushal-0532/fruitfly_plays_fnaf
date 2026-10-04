@@ -244,6 +244,8 @@ class Supervisor:
             self.flip_t = self.cam_t = None                               # the raise never happened / the monitor is already down
         if not power_ok:
             return None
+        if any(s.light_on[x] is True for x in "LR"):
+            return None  # a light is still on: switch it off first (live 2026-10-04: a second check started 0.6 s after the first, both lights read on, the light_off clicks looped all night)
         scale = getattr(c, "HOUR_SCALE", {}).get(s.hour, 1.0)
         jam = any(self.jammed.values())
         halls = [x for x in "LR" if s.door_closed[x] is False and not self.jammed[x] and x not in self.look_t]  # a look still pending: wait for the light (or LOOK_FAIL_S -> jam)

@@ -29,7 +29,6 @@ class ReadoutPolicy(Supervisor):
         self.W = np.asarray(weights, float)               # (2 sides L,R, len(NAMES))
         self.closed_t = {"L": None, "R": None}
         self.conf = {"cove": 0.0, "cam4b": 0.0}           # confirmed fly scores: a run of high frames on the camera, held until a run of low ones
-        self.on_since = {"L": None, "R": None}          # when each hall light came on: the score only counts after LOOK_MIN_S (live: the light-on ramp reads 0.99)
         self.cam_since = (None, 0.0)
         self.run = {"cove": [0, 0], "cam4b": [0, 0]}      # [consecutive high frames, consecutive low frames]
 
@@ -47,9 +46,6 @@ class ReadoutPolicy(Supervisor):
                 self.closed_t[side] = t if self.closed_t[side] is None else self.closed_t[side]
             else:
                 self.closed_t[side] = None
-        for x in "LR":
-            on = s.light_on.get(x)
-            self.on_since[x] = (t if self.on_since[x] is None else self.on_since[x]) if on else None
         if s.cam != self.cam_since[0]:
             self.cam_since = (s.cam, t)
         hall = {x: s.hall[x] if self.on_since[x] is not None and t - self.on_since[x] >= getattr(self.c, "LOOK_MIN_S", 0.0) else None for x in "LR"}
