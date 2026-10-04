@@ -150,6 +150,13 @@ def main(argv=None):
                "run_log": str(runs[-1]) if runs else None}
         if runs:
             rec["death"] = death_report(runs[-1])
+            try:
+                from scripts.digest import digest
+                rec["digest"] = digest(runs[-1])
+                (Path(config.LOG_DIR) / "digests").mkdir(exist_ok=True)
+                (Path(config.LOG_DIR) / "digests" / (runs[-1].stem + ".json")).write_text(json.dumps(rec["digest"], indent=1))
+            except Exception as e:  # the digest must never break the retry loop
+                rec["digest_error"] = repr(e)[:200]
             if "--record" in extra:
                 try:
                     from scripts.forensics import make_sheet

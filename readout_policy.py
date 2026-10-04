@@ -17,6 +17,7 @@ WEIGHTS_PATH = Path(__file__).parent / "data/templates/readout_policy.npz"
 READOUT_REASONS = frozenset(f"readout_{v}_{s}" for v in ("close", "open") for s in "LR")
 CLOSE_T, OPEN_T = 0.6, 0.4        # hysteresis on the sigmoid: close above CLOSE_T, open below OPEN_T
 NAMES = ["hall_L", "hall_R", "cove_conf", "cam4b_conf", "closed_L", "closed_R", "tclosed_L", "tclosed_R", "probe_L", "probe_R", "monitor", "power", "bias"]
+CAM_SETTLE_S = 0.6   # s after a camera switch before its fly score counts (live: the first frames of a 1C look read 1.0)
 TCLOSED_S = 12.0                  # time-closed feature scale (s); probe_X = door X has been shut >= TCLOSED_S (a step feature: AND-like rules stay linear)
 
 
@@ -28,6 +29,8 @@ class ReadoutPolicy(Supervisor):
         self.W = np.asarray(weights, float)               # (2 sides L,R, len(NAMES))
         self.closed_t = {"L": None, "R": None}
         self.conf = {"cove": 0.0, "cam4b": 0.0}           # confirmed fly scores: a run of high frames on the camera, held until a run of low ones
+        self.on_since = {"L": None, "R": None}          # when each hall light came on: the score only counts after LOOK_MIN_S (live: the light-on ramp reads 0.99)
+        self.cam_since = (None, 0.0)
         self.run = {"cove": [0, 0], "cam4b": [0, 0]}      # [consecutive high frames, consecutive low frames]
 
     def _out(self, action, reason, t, arg=None):
@@ -44,10 +47,17 @@ class ReadoutPolicy(Supervisor):
                 self.closed_t[side] = t if self.closed_t[side] is None else self.closed_t[side]
             else:
                 self.closed_t[side] = None
+        for x in "LR":
+            on = s.light_on.get(x)
+            self.on_since[x] = (t if self.on_since[x] is None else self.on_since[x]) if on else None
+        if s.cam != self.cam_since[0]:
+            self.cam_since = (s.cam, t)
+        hall = {x: s.hall[x] if self.on_since[x] is not None and t - self.on_since[x] >= getattr(self.c, "LOOK_MIN_S", 0.0) else None for x in "LR"}
+        cam_ok = t - self.cam_since[1] >= CAM_SETTLE_S
         for key, cam, thr, n_hi, n_lo in (("cove", "1C", self.c.COVE_THRESH, self.c.COVE_CONFIRM, self.c.COVE_CLEAR_CONFIRM),
                                           ("cam4b", "4B", self.c.CAM4B_THRESH, self.c.CAM4B_CONFIRM, self.c.COVE_CLEAR_CONFIRM)):
             v = getattr(s, key)
-            if s.monitor_up and s.cam == cam and v is not None:  # the camera is on screen: one score per frame
+            if s.monitor_up and s.cam == cam and v is not None and cam_ok:  # the camera is on screen: one score per frame
                 hi = v >= thr
                 self.run[key] = [self.run[key][0] + 1 if hi else 0, 0 if hi else self.run[key][1] + 1]
                 if self.run[key][0] >= n_hi:
@@ -59,7 +69,7 @@ class ReadoutPolicy(Supervisor):
         closed = [float(bool(s.door_closed[x])) for x in "LR"]
         tcl = [0.0 if self.closed_t[x] is None else min(t - self.closed_t[x], 30.0) / TCLOSED_S for x in "LR"]
         v = lambda x: 0.0 if x is None else float(x)
-        return np.array([v(s.hall["L"]), v(s.hall["R"]), self.conf["cove"], self.conf["cam4b"], *closed, *tcl, *[float(x >= 1.0) for x in tcl], float(bool(s.monitor_up)),
+        return np.array([v(hall["L"]), v(hall["R"]), self.conf["cove"], self.conf["cam4b"], *closed, *tcl, *[float(x >= 1.0) for x in tcl], float(bool(s.monitor_up)),
                          (s.power_pct or 0.0) / 100.0, 1.0])
 
     def targets(self, x):

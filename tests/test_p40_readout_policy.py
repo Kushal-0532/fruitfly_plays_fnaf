@@ -29,7 +29,9 @@ def test_hysteresis_and_reasons():
         W[i, R.NAMES.index(f"closed_{side}")] = 4.0
     W[:, -1] = -4.0
     pol = R.ReadoutPolicy(PowerModel(), night=None, weights=W)
-    d = pol.decide(state(hall={"L": 0.9, "R": None}, light_on={"L": True, "R": False}), 10.0)
+    lit = state(hall={"L": 0.9, "R": None}, light_on={"L": True, "R": False})
+    assert pol.decide(lit, 9.0).action != Action.DOOR_L          # the light just came on: its ramp reads high, wait LOOK_MIN_S
+    d = pol.decide(lit, 10.5)
     assert (d.action, d.reason) == (Action.DOOR_L, "readout_close_L")
     s = state(door_closed={"L": True, "R": False})
     assert pol.decide(s, 12.0).action != Action.DOOR_L          # p = sigmoid(0) = 0.5: between thresholds, door stays closed
