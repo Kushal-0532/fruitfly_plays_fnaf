@@ -9,7 +9,7 @@ the left doorway", "Chica is at the window", "Foxy has left his cove". Those sco
 **Status:** Nights 1, 2 and 3 have been won live. The Night 3 win (2026-10-05) was played with the trained fly readout making the
 door decisions. 6 AM arrived about 7 seconds after the power ran out.
 
-**Demo:** [Watch on YouTube](https://www.youtube.com/watch?v=fRMy38bjCZA)
+[![Demo: a fruit fly brain plays Five Nights at Freddy's](https://img.youtube.com/vi/fRMy38bjCZA/maxresdefault.jpg)](https://www.youtube.com/watch?v=fRMy38bjCZA)
 
 > Honest scope: the fly model does early vision only (photoreceptors to motion detectors). It is not a whole fly brain, it is never
 > retrained on the game, and ordinary code still decides *when to look* and keeps the bot safe. What the fly owns is **seeing** and
