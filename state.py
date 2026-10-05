@@ -7,7 +7,7 @@ import config
 
 SIDES = ("L", "R")
 DICT_FIELDS = ("door_closed", "light_on", "hall")
-SCALARS = ("hour", "power_pct", "usage", "monitor_up", "cam", "foxy_stage", "cove", "cam4b")
+SCALARS = ("hour", "power_pct", "usage", "monitor_up", "cam", "foxy_stage", "cove", "cam4b", "cove_gone")
 
 
 @dataclass
@@ -24,6 +24,7 @@ class Readings:
     foxy_stage: int | None = None
     cam4b: float | None = None     # the fly's "somebody is on cam 4B" score (Chica / Freddy), held STALE_S["cam4b"] s
     cove: float | None = None      # the fly's "Foxy is out of the cove" score from a cam-1C look (held STALE_S["cove"] s)
+    cove_gone: float | None = None  # the fly's "the cove is EMPTY: Foxy is running" score from a cam-1C look
     cam_feat: list | None = None   # the fly's activity over the camera view (monitor up only); never held across frames
 
 
@@ -41,7 +42,9 @@ class GameState:
     foxy_stage: int | None = None
     cove: float | None = None
     cam4b: float | None = None
+    cove_gone: float | None = None
     cam_feat: list | None = None
+    fresh: set | None = None       # scalars that came from a reading this step (not held); None = unknown, treat all as fresh
     trusted: bool = False
     reasons: list = field(default_factory=list)
 
@@ -115,6 +118,7 @@ class StateTracker:
                 reasons.append("capture_stall")
 
         s.cam_feat = r.cam_feat if s.monitor_up else None
+        s.fresh = {k for k in SCALARS if vals[k] is not None}
         s.reasons = reasons
         s.trusted = not any(x.startswith(("missing:", "frozen", "capture")) for x in reasons)
         return copy.deepcopy(s)  # snapshot: caller mutation can't reach tracker (tracker keeps no refs anyway)

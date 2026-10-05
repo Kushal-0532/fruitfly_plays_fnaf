@@ -54,5 +54,5 @@ def test_sim_speed(tmp_path):
 def test_log_schema(tmp_path):
     _, _, rows = simulate(night_bonnie_left_visit(), 30, out_dir=tmp_path)
     keys = {"t", "hour", "power_pct", "usage", "monitor_up", "door_closed", "light_on", "cam", "hall",
-            "foxy_stage", "cove", "cam4b", "trusted", "reasons", "action", "arg", "reason", "guard", "loop_ms"}
+            "foxy_stage", "cove", "cam4b", "cove_gone", "trusted", "reasons", "action", "arg", "reason", "guard", "loop_ms"}
     assert all(set(r) == keys for r in rows)

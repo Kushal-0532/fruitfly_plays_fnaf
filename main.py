@@ -18,7 +18,7 @@ from safety import FrameRing, safe_mode
 from state import Readings
 
 ROW_KEYS = ("hour", "power_pct", "usage", "monitor_up", "door_closed", "light_on", "cam", "hall",
-            "foxy_stage", "cove", "cam4b", "trusted", "reasons")
+            "foxy_stage", "cove", "cam4b", "cove_gone", "trusted", "reasons")
 
 
 @dataclass
@@ -102,6 +102,7 @@ def run(capture, reader, actuator, tracker, supervisor, guards, log_path, night,
                    "guard": "" if (vetted.action, vetted.reason) == (dec.action, dec.reason)
                    else f"{vetted.action.name}:{vetted.reason}",
                    "loop_ms": round((time.perf_counter() - w0) * 1000, 2)}
+            row.update(getattr(supervisor, "trace", {}))  # readout policy: door probabilities, swallowed Supervisor verdict
             if viz is not None:
                 viz.update(state, row)
             if shadow is not None and got and frame is not None:
@@ -165,6 +166,10 @@ def main(argv=None):
     apply_fit()
     try:
         config.COVE_THRESH = float(np.load("data/templates/fly_cove.npz")["threshold"])
+    except FileNotFoundError:
+        pass
+    try:
+        config.COVE_GONE_THRESH = float(np.load("data/templates/fly_cove_gone.npz")["threshold"])
     except FileNotFoundError:
         pass
     if a.collect_cove:

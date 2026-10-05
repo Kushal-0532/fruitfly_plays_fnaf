@@ -82,6 +82,8 @@ def wait_menu(tpl, night, timeout, stop):
         raise_game()
         cap = None
         try:
+            # the "Night N" label only shows while >> is on Continue (live: the menu came back with >> New Game)
+            _continue_actuator().hover("menu_continue", 0.5)
             cap = Capture()
             f = grab(cap)
         except RuntimeError as e:  # transient pipewire/gst hiccup: try again
@@ -98,15 +100,18 @@ def wait_menu(tpl, night, timeout, stop):
     return None
 
 
+def _continue_actuator():
+    wid, x, y, w, h = find_window()
+    geom = Geometry(Window(wid, x, y, w, h), SCALE)
+    rx, ry = capture_to_ref(geom, *CLICK)
+    return Actuator(wid, geom, {"menu_continue": (rx - 4, ry - 4, 8, 8)})
+
+
 def click_continue():
     cap = Capture()
     try:
         grab(cap)
-        wid, x, y, w, h = find_window()
-        geom = Geometry(Window(wid, x, y, w, h), SCALE)
-        rx, ry = capture_to_ref(geom, *CLICK)
-        buttons = {"menu_continue": (rx - 4, ry - 4, 8, 8)}
-        Actuator(wid, geom, buttons).click("menu_continue")
+        _continue_actuator().click("menu_continue")
     finally:
         cap.close()
 
@@ -123,6 +128,15 @@ def main(argv=None):
     if a.make_template:
         return make_template(a.night)
     tpl = np.load(TEMPLATE)
+    # xdotool input does not count as activity: GNOME locked the screen after idle-delay mid-run (live 2026-10-05, capture all black).
+    # Hold an idle inhibitor while the runner lives; it dies with us (PDEATHSIG), user settings stay untouched.
+    try:
+        import ctypes, signal
+        subprocess.Popen(["gnome-session-inhibit", "--inhibit", "idle:suspend", "--reason", "fly-fnaf auto_night", "--inhibit-only"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         preexec_fn=lambda: ctypes.CDLL("libc.so.6").prctl(1, signal.SIGTERM))
+    except FileNotFoundError:
+        print("warning: gnome-session-inhibit missing; the screen may lock mid-run", flush=True)
     out, stop = Path(config.LOG_DIR) / "auto", Path(config.LOG_DIR) / "AUTO_STOP"
     out.mkdir(parents=True, exist_ok=True)
     for r in range(a.rounds):
@@ -139,11 +153,15 @@ def main(argv=None):
         t0, cmd = time.time(), [sys.executable, "main.py", "--night", str(a.night), *extra]
         if "--record" in extra:  # one corpus folder per round
             cmd[cmd.index("--record") + 1] = f"{extra[extra.index('--record') + 1]}_{int(t0)}"
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        while proc.poll() is None:  # keep the game window on top for the whole night
-            raise_game()
-            time.sleep(4)
-        res = subprocess.CompletedProcess(cmd, proc.returncode, *proc.communicate())
+        # files, not PIPEs: nobody reads a pipe until exit, so ~64 KB of output (gst warnings inherit stderr) blocked main
+        # forever (live 2026-10-04: main hung 530 s in safe mode while the game played on)
+        out_p, err_p = Path(config.LOG_DIR) / "main_stdout.log", Path(config.LOG_DIR) / "main_stderr.log"
+        with open(out_p, "w") as fo, open(err_p, "w") as fe:
+            proc = subprocess.Popen(cmd, stdout=fo, stderr=fe, text=True)
+            while proc.poll() is None:  # keep the game window on top for the whole night
+                raise_game()
+                time.sleep(4)
+        res = subprocess.CompletedProcess(cmd, proc.returncode, out_p.read_text(), err_p.read_text())
         line = [l for l in res.stdout.splitlines() if l.startswith("RunSummary")]
         runs = sorted(Path(config.LOG_DIR).glob("run_*.jsonl"), key=lambda p: p.stat().st_mtime)
         rec = {"round": r + 1, "secs": round(time.time() - t0), "summary": line[-1] if line else res.stderr[-300:],

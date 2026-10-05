@@ -56,7 +56,7 @@ def closed_state(hall, light=True, t=0.0, **kw):
 
 
 def test_hold_and_reopen():
-    s, c = sup()
+    s, c = sup(CLOSED_LIGHT_S=1e9)  # the lit hold itself (by default the light goes off after CLOSED_LIGHT_S)
     s.decide(make_state(hall={"L": 0, "R": 0.9}), 0)  # closes R at t=0
     t = c.SETTLE_S
     # before MIN_HOLD_S: nothing
@@ -162,7 +162,7 @@ def test_check_interval_shrinks_later_in_the_night():
 
 
 def test_closed_door_reopens_blind_after_the_hold():
-    s, c = sup(REOPEN_PROBE_S=12.0)
+    s, c = sup(REOPEN_PROBE_S=12.0, CLOSED_LIGHT_S=1e9)
     closed = dict(door_closed={"L": True, "R": False}, light_on={"L": True, "R": False}, hall={"L": 0.97, "R": None})
     assert s.decide(make_state(**closed), 0.0).reason != "reopen_probe"
     d = s.decide(make_state(**closed), 12.5)
@@ -187,6 +187,22 @@ def test_dark_looks_jam_the_side_and_monitor_is_never_raised():
     assert all(a not in (Action.MONITOR, Action.LIGHT_L) for tt, a, r in reasons if tt > jam_t)
 
 
+def test_no_flip_while_a_look_is_unanswered():
+    """Live 2026-10-05 N3 round 4: the R light stayed dark (Chica jammed it) and a stall flip raised the monitor 2 s later (F25)."""
+    s, c = sup(HOUR_SCALE={})
+    s.night = 3
+    s.decide(make_state(), 0)
+    look, t = None, 1.0
+    while t < 120:
+        d = s.decide(dark(t), t)
+        if d.action != Action.NONE:
+            s.last_action_t = t
+        if d.reason == "hall_check":
+            look = t
+        assert not (d.action == Action.MONITOR and look is not None and t - look < c.LOOK_FAIL_S), (t, look)
+        t += 0.1
+
+
 def test_one_dark_look_or_a_hall_reading_is_not_a_jam():
     s, c = sup(HOUR_SCALE={}, CHECK_PERIOD={"L": 8, "R": 1e9})
     s.decide(make_state(), 0)
@@ -207,10 +223,21 @@ def test_no_light_click_on_a_closed_door():
 
 
 def test_reopen_probe_then_immediate_look():
-    s, c = sup(REOPEN_PROBE_S=12.0)
+    s, c = sup(REOPEN_PROBE_S=12.0, CLOSED_LIGHT_S=1e9)
     closed = dict(door_closed={"L": True, "R": False}, light_on={"L": True, "R": False}, hall={"L": 0.97, "R": None})
     s.decide(make_state(**closed), 0.0)
     assert s.decide(make_state(**closed), 12.5).reason == "reopen_probe"
     t = 12.5 + c.SETTLE_S + 0.1
     d = s.decide(make_state(t=t), t)
     assert (d.action, d.reason) == (Action.LIGHT_L, "hall_check")
+
+
+def test_light_over_a_closed_door_goes_off():
+    """Sim N3 2026-10-05: R shut on Chica with its light on, the light burned 12+ s and blocked every flip; Foxy ran unwatched."""
+    s, c = sup(REOPEN_PROBE_S=None)
+    s.decide(make_state(hall={"L": 0, "R": 0.9}), 0)  # closes R with the light on
+    t, d = c.SETTLE_S, None
+    while t < c.SETTLE_S + c.CLOSED_LIGHT_S + 1.0 and (d is None or d.reason != "light_off"):
+        d = s.decide(closed_state(0.9, t=t), t)
+        t += 0.1
+    assert (d.action, d.reason) == (Action.LIGHT_R, "light_off") and t - c.SETTLE_S <= c.CLOSED_LIGHT_S + 0.2  # light first seen at SETTLE_S

@@ -81,8 +81,11 @@ class Guards:
             return Decision(SAFE, None, self.latched)
         if self.stop_path.exists():
             return self._safe("stop_file")
-        if any(r in state.reasons for r in FREEZE_REASONS):
-            return self._safe(next(r for r in FREEZE_REASONS if r in state.reasons))
+        # before the first trusted state a static night-start card sends no frames (damage-based screencast): not a stall;
+        # untrusted_too_long (STARTUP_GRACE_S) still catches a real capture failure
+        hit = [r for r in FREEZE_REASONS if r in state.reasons and (self.ever_trusted or r != "capture_stall")]
+        if hit:
+            return self._safe(hit[0])
         if state.trusted:
             self.untrusted_since, self.ever_trusted = None, True
         else:

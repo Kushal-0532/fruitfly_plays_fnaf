@@ -87,3 +87,16 @@ def test_none_sends_nothing():
 def test_probe_requires_calibration():
     with pytest.raises(Uncalibrated):
         actuator.probe("calibration.example.json")
+
+
+def test_second_click_on_the_same_button_skips_the_pan_settle():
+    """light_off right after hall_check: the pointer never left the button, the view is already panned."""
+    a, r, c = make()
+    a.click("light_L")
+    t1 = c.t
+    a.click("light_L")
+    assert c.t - t1 == pytest.approx(config.CLICK_SETTLE + config.CLICK_HOLD)
+    a.monitor()                     # the pointer moved: the next click pans again
+    t2 = c.t
+    a.click("light_L")
+    assert c.t - t2 == pytest.approx(config.PAN_SETTLE + config.CLICK_HOLD)

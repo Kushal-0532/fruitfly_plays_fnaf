@@ -66,3 +66,43 @@ def test_saved_weights_run_full_nights():
         r = sim_env.play(seed=1, night=night, policy="readout")
         assert r["audit"]["violations"] == [] and r["safe"] is None
         assert all(a in ("6am", "power_out", "foxy", "freddy", "bonnie_jam", "chica_jam") for a in [r["cause"]])
+
+
+def test_trained_readout_reopens_without_evidence():
+    """Live 2026-10-04 N3: one cove sighting shut L and the capped tclosed kept it shut all night (power out at 4 AM).
+    With no fresh evidence a closed door must reopen on the saved weights within ~2 min."""
+    from tests.fakes import make_state
+    pol = R.ReadoutPolicy(PowerModel(), night=3)
+    for k in range(1200):  # 120 s at 10 Hz, L shut, nothing seen
+        t = k / 10
+        x = pol.features(make_state(door_closed={"L": True, "R": False}, hall={"L": None, "R": None}, power_pct=60.0), t)
+        if not pol.targets(x)["L"][0]:
+            assert 20 < t < 120, t
+            return
+    raise AssertionError("L never reopened")
+
+
+def test_closed_door_does_not_freeze_looks():
+    """Live 2026-10-04 N3 round 2: with L shut the Supervisor's reopen_probe (swallowed by the readout) returned every step
+    and no look or flip ran for 170 s. Looks/flips must keep coming while a door is held shut."""
+    from tests.fakes import make_state
+    pol = R.ReadoutPolicy(PowerModel(), night=3, weights=np.zeros((2, len(R.NAMES))) + np.eye(2, len(R.NAMES), 4) * 20)  # holds doors shut
+    pol.close_t["L"] = 0.0
+    acts = []
+    for k in range(600):
+        t = 10.0 + k / 10
+        d = pol.decide(make_state(door_closed={"L": True, "R": False}, hall={"L": None, "R": None}, hour=2), t)
+        if d.action != Action.NONE:
+            acts.append(d.action)
+            pol.last_action_t = t
+    assert acts, "no look or flip in 60 s with L shut"
+
+
+def test_fly_4b_verdict_closes_right_door():
+    """Live 2026-10-05 N3 round 3: the fly saw 4B = 1.0 on 4 flips, the readout swallowed threat_close_R every time. The Supervisor's
+    fly-verdict close must reach the door; other Supervisor door rules stay swallowed."""
+    from tests.fakes import make_state
+    pol = R.ReadoutPolicy(PowerModel(), night=3, weights=np.zeros((2, len(R.NAMES))))
+    pol.r_out = True  # the fly saw 4B occupied on the last flip; the monitor is now down
+    d = pol.decide(make_state(hall={"L": None, "R": None}, hour=2), 50.0)
+    assert (d.action, d.reason) == (Action.DOOR_R, "threat_close_R")

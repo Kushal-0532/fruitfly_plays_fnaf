@@ -64,3 +64,9 @@ def test_state_holds_cove_then_drops_it():
     tr.update(Readings(0.0, cove=0.8))
     assert tr.update(Readings(10.0)).cove == 0.8
     assert tr.update(Readings(0.0 + config.STALE_S["cove"] + 1)).cove is None
+
+
+def test_cam_read_hands_out_each_snapshot_once():
+    h = FlyHallway(FakeBrain({"t": 10.0, "cam_feat": [0] * 6, "cam": "1C", "cove": 0.9}))
+    assert h.cam_read(None, 10.1, "1C").cove == 0.9
+    assert h.cam_read(None, 10.2, "1C").cove is None  # same fly verdict again: not a second frame

@@ -28,6 +28,9 @@ READOUT_PATH = "data/templates/fly_readout.npz"
 REFS_PATH = "data/templates/hall_ref.npz"
 COVE_REF_PATH = "data/templates/cove_ref.npz"
 COVE_PATH = "data/templates/fly_cove.npz"
+COVE_GONE_PATH = "data/templates/fly_cove_gone.npz"
+GONE_GRID = (5, 4)  # the gone readout pools the fly's cam-1C activity per type over this grid (x, y): WHERE the activity is tells
+                    # "Foxy out on the stage" (3) from "cove empty" (4); the 6 view-wide means could not (held-out hit 4-16%)
 CAM4B_REF_PATH = "data/templates/cam4b_ref.npz"
 CAM4B_PATH = "data/templates/fly_cam4b.npz"
 CAM_PATHS = {"1C": (COVE_REF_PATH, COVE_PATH), "4B": (CAM4B_REF_PATH, CAM4B_PATH)}  # cam -> (empty reference, fitted readout)
@@ -137,6 +140,25 @@ class CoveReadout:
         return float(_sigmoid(x @ self.w + self.b))
 
 
+def gone_features(act, xy, grid=GONE_GRID):
+    """act (types, hexals over CAM_VIEW), xy = (x, y) of those hexals -> per-type mean activity in each grid cell (types * nx * ny)."""
+    nx, ny = grid
+    x, y = ((v - v.min()) / (np.ptp(v) + 1e-9) for v in xy)
+    cell = np.minimum((x * nx).astype(int), nx - 1) * ny + np.minimum((y * ny).astype(int), ny - 1)
+    return np.concatenate([np.stack([a[cell == c].mean() for c in range(nx * ny)]) for a in act])
+
+
+class CoveGoneReadout:
+    """cove_gone = sigmoid(w . ((gone_features - mean) / sd) + b): 'the cove is EMPTY, Foxy is running' (stage 4). Fitted by fit_cove_gone."""
+
+    def __init__(self, path=COVE_GONE_PATH):
+        z = np.load(path)
+        self.w, self.b, self.mean, self.sd, self.threshold = z["w"], float(z["b"]), z["mean"], z["sd"], float(z["threshold"])
+
+    def score(self, act, xy):
+        return float(_sigmoid((gone_features(act, xy) - self.mean) / self.sd @ self.w + self.b))
+
+
 class FlyBrain:
     """Runs the network on the latest frames in its own thread. snapshot() is cheap and thread-safe."""
 
@@ -147,6 +169,7 @@ class FlyBrain:
         self.cove = CoveReadout() if Path(COVE_PATH).exists() else None
         self.cove_ref = load_cove_ref() if (diff and (self.cove is None or self.cove.mode == "diff")) else None
         self.cam4b = CoveReadout(CAM4B_PATH) if Path(CAM4B_PATH).exists() else None
+        self.gone = CoveGoneReadout() if Path(COVE_GONE_PATH).exists() else None
         self.cam4b_ref = load_cove_ref(CAM4B_REF_PATH) if (diff and (self.cam4b is None or self.cam4b.mode == "diff")) else None
         self._p = perception
         self._q, self._cv, self._lock = deque(maxlen=2), threading.Condition(), threading.Lock()
@@ -194,6 +217,7 @@ class FlyBrain:
                 regions = {s: np.flatnonzero(masks[s]).tolist() for s in "LR"}
                 cm = (xg >= CAM_VIEW[0]) & (xg <= CAM_VIEW[1]) & (yg >= CAM_VIEW[2]) & (yg <= CAM_VIEW[3])
                 cam_ix = [idx[ty][cm] for ty in READOUT_TYPES] + [np.concatenate([idx[ty][cm] for ty in names]) for names in (T4, T5)]
+                cam_xy = (xg[cm], yg[cm])
             p.step(stimulus(frame, self.geom, self.buttons, self.refs, light_on, cam, self.cam4b_ref if cam == "4B" else self.cove_ref))
             act = (p.state.nodes.activity - p.baseline)[0].numpy()
             feats = {s: np.array([act[i].mean() for i in ix[s]]) for s in "LR"}
@@ -201,7 +225,8 @@ class FlyBrain:
             danger = {s: (self.readout.score(s, feats[s]) if self.readout else None) for s in "LR"}
             cove = self.cove.score(cam_feat) if (self.cove and cam == "1C" and light_on is None) else None
             cam4b = self.cam4b.score(cam_feat) if (self.cam4b and cam == "4B" and light_on is None) else None
-            snap = {"t": t, "danger": danger, "cam_feat": cam_feat, "cam": cam, "cove": cove, "cam4b": cam4b, "feats": {s: feats[s].tolist() for s in "LR"}}
+            gone = self.gone.score(np.stack([act[i] for i in cam_ix[:4]]), cam_xy) if (self.gone and cam == "1C" and light_on is None) else None
+            snap = {"t": t, "danger": danger, "cam_feat": cam_feat, "cam": cam, "cove": cove, "cam4b": cam4b, "cove_gone": gone, "feats": {s: feats[s].tolist() for s in "LR"}}
             if self.readout:
                 snap["contrib"] = {s: (self.readout.z(s, feats[s]) * self.readout.w).tolist() for s in "LR"}
             if self.view:
@@ -230,6 +255,7 @@ class FlyHallway:
     def __init__(self, brain, smooth=None):
         self.brain, self.smooth = brain, smooth or config.HALL_SMOOTH_FRAMES
         self.hist = {"L": deque(maxlen=self.smooth), "R": deque(maxlen=self.smooth)}
+        self.cam_snap_t = None  # t of the last snapshot whose cove/cam4b score was handed out
 
     STALE_S = 1.5  # a verdict older than this (brain too slow / stuck) is not used
 
@@ -259,9 +285,15 @@ class FlyHallway:
         for s in "LR":
             self.hist[s].clear()
         fresh = snap if snap and t - snap["t"] <= 0.5 else None
+        # each fly verdict once: the loop outruns the fly, and a repeated snapshot counted as a second confirming frame
+        # (live 2026-10-05 N3: one static transition frame read 0.98 twice -> foxy_close, left door shut 41 s for nothing)
+        new = fresh if fresh and fresh["t"] != self.cam_snap_t else None
+        if new:
+            self.cam_snap_t = new["t"]
         return Readings(t, cam_feat=fresh["cam_feat"] if fresh else None,
-                        cove=fresh["cove"] if fresh and cam == "1C" and fresh.get("cam") == "1C" else None,
-                        cam4b=fresh["cam4b"] if fresh and cam == "4B" and fresh.get("cam") == "4B" else None)
+                        cove=new["cove"] if new and cam == "1C" and new.get("cam") == "1C" else None,
+                        cam4b=new["cam4b"] if new and cam == "4B" and new.get("cam") == "4B" else None,
+                        cove_gone=new.get("cove_gone") if new and cam == "1C" and new.get("cam") == "1C" else None)
 
 
 class Tee:
@@ -373,6 +405,35 @@ def fit_cove(sessions, mode="diff", features="all", out=None, write=True, min_st
         m = LogisticRegression(C=1.0).fit(Z, y)
         Path(out).parent.mkdir(parents=True, exist_ok=True)
         np.savez(out, use=use, w=m.coef_[0], b=m.intercept_[0], mean=mean, sd=sd, threshold=thr, mode=mode)
+    return res
+
+
+def fit_cove_gone(sessions, C=0.1, q=0.98, out=COVE_GONE_PATH, write=True):
+    """Fit the 'cove empty' readout from data/features/fly_cove_grid_<sess>.npz (scripts/fly_danger_corpus.py --cove-grid). Label = stage 4.
+    Cross-validated holding out whole looks; threshold = held-out score that keeps (1 - q) of the stage 1-3 frames above it."""
+    from sklearn.linear_model import LogisticRegression
+    X, st, grp = [], [], []
+    for sess in sessions:
+        z = np.load(f"data/features/fly_cove_grid_{sess}.npz")
+        X += [gone_features(a, (z["xg"], z["yg"])) for a in z["act"]]
+        st += list(z["stage"]); grp += [(sess, int(k)) for k in z["look"]]
+    X, st = np.array(X), np.array(st)
+    y = (st == 4).astype(int)
+    mean, sd = X.mean(0), X.std(0) + 1e-9
+    Z = (X - mean) / sd
+    cv = np.zeros(len(y))
+    for g in set(grp):
+        te = np.array([k == g for k in grp])
+        cv[te] = LogisticRegression(C=C, max_iter=2000).fit(Z[~te], y[~te]).decision_function(Z[te])
+    sc = _sigmoid(cv)
+    neg = np.sort(sc[y == 0])
+    thr = float(neg[int(np.ceil(q * len(neg))) - 1]) + 1e-6
+    looks = {g for g, v in zip(grp, y) if v}
+    res = {"n": len(y), "gone_frames": int(y.sum()), "gone_looks": len(looks), "threshold": thr,
+           "hit_rate": float((sc[y == 1] > thr).mean()), "false_alarm_by_stage": {int(s): float((sc[st == s] > thr).mean()) for s in (1, 2, 3)}}
+    if write:
+        m = LogisticRegression(C=C, max_iter=2000).fit(Z, y)
+        np.savez(out, w=m.coef_[0], b=m.intercept_[0], mean=mean, sd=sd, threshold=thr, grid=np.array(GONE_GRID))
     return res
 
 

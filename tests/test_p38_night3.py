@@ -37,6 +37,8 @@ def test_night3_flip_selects_4b():
 
 def look4b(s, t, score, steps=3):
     first = d = None
+    pre = t - config.CAM_SETTLE_S - 0.01  # 4B on screen long enough for its fly scores to count
+    s.decide(make_state(t=pre, monitor_up=True, cam="4B"), pre)
     for k in range(steps):
         tt = t + 0.1 * k
         d = s.decide(make_state(t=tt, monitor_up=True, cam="4B", cam4b=score), tt)
@@ -61,3 +63,19 @@ def test_single_noisy_4b_frame_or_left_door_irrelevant():
     assert d.reason != "stall_down"
     d, t = look4b(s, 6.0, 0.1)
     assert d.action == Action.NONE
+
+
+def test_flip_holds_until_the_fly_judged_the_camera():
+    """Live 2026-10-05 N3 round 2: 1 s holds gave the fly one settled verdict, an empty cove went unconfirmed and Foxy got in."""
+    s = sup(3)
+    s.decide(make_state(), 0)
+    s.flip_cam, s.flip_t, s.last_flip = "4B", 10.0, 10.0
+    up = lambda tt, v=None, fresh=set(): make_state(t=tt, monitor_up=True, cam="4B", cam4b=v, fresh=fresh)
+    t = 10.0
+    while t < 10.0 + config.STALL_HOLD_S + 0.3:   # no new verdicts: hold past STALL_HOLD_S
+        assert s.decide(up(t), t).reason != "stall_down"
+        t += 0.1
+    for k in range(config.FLIP_VERDICTS):         # three fresh verdicts -> lower
+        d = s.decide(up(t, 0.05, {"cam4b"}), t)
+        t += 0.1
+    assert d.reason == "stall_down"

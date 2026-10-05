@@ -1,5 +1,5 @@
 """Run the fly over every frame of a corpus session; save per-frame danger scores + the reader state. Offline, ~60 ms/frame.
-usage: python scripts/fly_danger_corpus.py data/corpus/n2_a"""
+usage: python scripts/fly_danger_corpus.py [--cove | --cam4b | --cove-grid] data/corpus/n2_a"""
 import json
 import sys
 import time
@@ -42,6 +42,33 @@ def cove(session, raw=False, cam="1C"):
     np.savez(f"data/features/fly_{'cove' if cam == '1C' else 'cam4b'}_{'raw' if raw else 'diff'}_{d.name}.npz", frames=np.array(frames), look=np.array(look_of), feats=np.array(feats, np.float32))
 
 
+def cove_grid(session):
+    """The fly's per-hexal activity (READOUT_TYPES over CAM_VIEW) on every labelled 1C look, run continuously from 10 frames before
+    the look -> data/features/fly_cove_grid_<session>.npz, for fly_brain.fit_cove_gone."""
+    import fly_brain as F
+    from perception import Perception
+    p = Perception()
+    idx = {ty: np.asarray(p.net.connectome.nodes.layer_index[ty][:]) for ty in F.READOUT_TYPES}
+    xg, yg = F.hex_frame_coords(p)
+    cm = (xg >= F.CAM_VIEW[0]) & (xg <= F.CAM_VIEW[1]) & (yg >= F.CAM_VIEW[2]) & (yg <= F.CAM_VIEW[3])
+    ref = F.load_cove_ref()
+    d = Path(session)
+    looks = {}
+    for i, st, look in F.cove_labels(d.name):
+        looks.setdefault(look, {})[i] = st
+    frames, look_of, stage, acts = [], [], [], []
+    for look, lab in sorted(looks.items()):
+        for i in range(max(min(lab) - 10, 0), max(lab) + 1):
+            p.step(F.stimulus(np.asarray(Image.open(d / "frames" / f"{i:06d}.png").convert("RGB")), None, None, None, None, "1C", ref))
+            if i in lab:
+                a = (p.state.nodes.activity - p.baseline)[0].numpy()
+                acts.append(np.stack([a[idx[ty][cm]] for ty in F.READOUT_TYPES]))
+                frames.append(i); look_of.append(look); stage.append(lab[i])
+    np.savez(f"data/features/fly_cove_grid_{d.name}.npz", frames=frames, look=look_of, stage=stage, act=np.array(acts, np.float32),
+             xg=xg[cm], yg=yg[cm])
+    print(session, len(frames), "frames")
+
+
 def main(session):
     d = Path(session)
     meta = json.loads((d / "meta.json").read_text())
@@ -74,7 +101,9 @@ def main(session):
 
 
 if __name__ == "__main__":
-    if sys.argv[1] in ("--cove", "--cam4b"):
+    if sys.argv[1] == "--cove-grid":
+        cove_grid(sys.argv[-1])
+    elif sys.argv[1] in ("--cove", "--cam4b"):
         cove(sys.argv[-1], raw="--raw" in sys.argv, cam="1C" if sys.argv[1] == "--cove" else "4B")
     else:
         main(sys.argv[1])

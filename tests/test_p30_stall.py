@@ -38,7 +38,7 @@ def test_flip_sequence_then_hall_look():
     assert (d.action, d.arg, d.reason) == (Action.CAM, "1C", "stall_cam")
     t += c.SETTLE_S + 0.01
     assert s.decide(make_state(t=t, monitor_up=True, cam="1C"), t).action == Action.NONE
-    t += c.STALL_HOLD_S
+    t += c.FLIP_MAX_S  # no fly verdicts on the camera: the hold runs to its cap
     d = s.decide(make_state(t=t, monitor_up=True, cam="1C"), t)
     assert (d.action, d.reason) == (Action.MONITOR, "stall_down")
     t += c.SETTLE_S + 0.01

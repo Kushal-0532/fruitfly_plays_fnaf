@@ -15,57 +15,70 @@ from policy import DOOR, Supervisor
 
 WEIGHTS_PATH = Path(__file__).parent / "data/templates/readout_policy.npz"
 READOUT_REASONS = frozenset(f"readout_{v}_{s}" for v in ("close", "open") for s in "LR")
+PASS_CLOSES = frozenset({"threat_close_L", "threat_close_R", "foxy_close"})  # Supervisor fly verdicts that still close a door
 CLOSE_T, OPEN_T = 0.6, 0.4        # hysteresis on the sigmoid: close above CLOSE_T, open below OPEN_T
 NAMES = ["hall_L", "hall_R", "cove_conf", "cam4b_conf", "closed_L", "closed_R", "tclosed_L", "tclosed_R", "probe_L", "probe_R", "monitor", "power", "bias"]
-CAM_SETTLE_S = 0.6   # s after a camera switch before its fly score counts (live: the first frames of a 1C look read 1.0)
 TCLOSED_S = 12.0                  # time-closed feature scale (s); probe_X = door X has been shut >= TCLOSED_S (a step feature: AND-like rules stay linear)
+TCLOSED_CAP_S = float("inf")      # no cap: live 2026-10-04 N3, capped at 30 s the trained W (L logit +0.8 with no evidence) kept L shut all night, power out 4 AM
+
+
+class _NoProbe:
+    """Config view without the Supervisor's reopen_probe. The readout owns reopens; a swallowed reopen_probe repeats every step and
+    returns before the looks/flips (live 2026-10-04 N3 round 2: L shut, no look or flip for 170 s, killed with R open)."""
+    REOPEN_PROBE_S = None
+
+    def __init__(self, c):
+        self._c = c
+
+    def __getattr__(self, k):
+        return getattr(self._c, k)
 
 
 class ReadoutPolicy(Supervisor):
     def __init__(self, power_model, cfg=None, night=None, weights=None):
-        super().__init__(power_model, cfg, night)
+        super().__init__(power_model, _NoProbe(cfg or config), night)
         if weights is None:
             weights = np.load(WEIGHTS_PATH)["W"]
         self.W = np.asarray(weights, float)               # (2 sides L,R, len(NAMES))
         self.closed_t = {"L": None, "R": None}
-        self.conf = {"cove": 0.0, "cam4b": 0.0}           # confirmed fly scores: a run of high frames on the camera, held until a run of low ones
-        self.cam_since = (None, 0.0)
-        self.run = {"cove": [0, 0], "cam4b": [0, 0]}      # [consecutive high frames, consecutive low frames]
+        self.conf = {"cove_gone": 0.0, "cam4b": 0.0}           # confirmed fly scores: a run of high frames on the camera, held until a run of low ones
+        self.run = {"cove_gone": [0, 0], "cam4b": [0, 0]}      # [consecutive high frames, consecutive low frames]
+        self.trace = {}                                   # per-step fields main.py adds to the log row: readout p, swallowed Supervisor verdict
 
     def _out(self, action, reason, t, arg=None):
-        if action in (Action.DOOR_L, Action.DOOR_R):      # the Supervisor's own door rules are replaced by the readout
+        # the Supervisor's door rules are replaced by the readout; decide() lets its camera verdicts through (PASS_CLOSES)
+        if action in (Action.DOOR_L, Action.DOOR_R):
+            self._swallowed = (action, reason)
             return Decision(Action.NONE, None, "idle")
         return super()._out(action, reason, t, arg)
 
     def features(self, s, t):
         """The fly's scores (hall L/R, cove, 4B; None = not seen = 0), door state and time closed, power."""
-        for side, key in (("L", "cove"), ("R", "cam4b")):
+        for side, key in (("L", "cove_gone"), ("R", "cam4b")):
             if self.closed_t[side] is not None and not s.door_closed[side]:
                 self.conf[key] = 0.0                      # the door that answers this camera was reopened: the sighting is consumed
             if s.door_closed[side]:
                 self.closed_t[side] = t if self.closed_t[side] is None else self.closed_t[side]
             else:
                 self.closed_t[side] = None
-        if s.cam != self.cam_since[0]:
-            self.cam_since = (s.cam, t)
         hall = {x: s.hall[x] if self.on_since[x] is not None and t - self.on_since[x] >= getattr(self.c, "LOOK_MIN_S", 0.0) else None for x in "LR"}
-        cam_ok = t - self.cam_since[1] >= CAM_SETTLE_S
-        for key, cam, thr, n_hi, n_lo in (("cove", "1C", self.c.COVE_THRESH, self.c.COVE_CONFIRM, self.c.COVE_CLEAR_CONFIRM),
+        # cove_conf = the fly saw the cove EMPTY (Foxy running); peeks only steer the Supervisor's flips (live 2026-10-05: closing on peeks ran the power out)
+        for key, cam, thr, n_hi, n_lo in (("cove_gone", "1C", self.c.COVE_GONE_THRESH, self.c.COVE_CONFIRM, self.c.COVE_CLEAR_CONFIRM),
                                           ("cam4b", "4B", self.c.CAM4B_THRESH, self.c.CAM4B_CONFIRM, self.c.COVE_CLEAR_CONFIRM)):
-            v = getattr(s, key)
-            if s.monitor_up and s.cam == cam and v is not None and cam_ok:  # the camera is on screen: one score per frame
+            v = self.cam_score(s, key, cam, t)
+            if v is not None:                            # a new, settled fly verdict on that camera
                 hi = v >= thr
                 self.run[key] = [self.run[key][0] + 1 if hi else 0, 0 if hi else self.run[key][1] + 1]
                 if self.run[key][0] >= n_hi:
                     self.conf[key] = 1.0
                 elif self.run[key][1] >= n_lo:
                     self.conf[key] = 0.0
-            if v is None:                                # sighting went stale (STALE_S): live run 2026-10-04 held the door shut all night on one cove frame
+            if getattr(s, key) is None:                  # sighting went stale (STALE_S): live run 2026-10-04 held the door shut all night on one cove frame
                 self.conf[key] = 0.0
         closed = [float(bool(s.door_closed[x])) for x in "LR"]
-        tcl = [0.0 if self.closed_t[x] is None else min(t - self.closed_t[x], 30.0) / TCLOSED_S for x in "LR"]
+        tcl = [0.0 if self.closed_t[x] is None else min(t - self.closed_t[x], TCLOSED_CAP_S) / TCLOSED_S for x in "LR"]
         v = lambda x: 0.0 if x is None else float(x)
-        return np.array([v(hall["L"]), v(hall["R"]), self.conf["cove"], self.conf["cam4b"], *closed, *tcl, *[float(x >= 1.0) for x in tcl], float(bool(s.monitor_up)),
+        return np.array([v(hall["L"]), v(hall["R"]), self.conf["cove_gone"], self.conf["cam4b"], *closed, *tcl, *[float(x >= 1.0) for x in tcl], float(bool(s.monitor_up)),
                          (s.power_pct or 0.0) / 100.0, 1.0])
 
     def targets(self, x):
@@ -78,11 +91,20 @@ class ReadoutPolicy(Supervisor):
         return out
 
     def decide(self, s, t):
+        self._swallowed = None
         d = super().decide(s, t)
         x = self.features(s, t)
+        sw = self._swallowed
+        want = self.targets(x)
+        p = 1.0 / (1.0 + np.exp(-(self.W @ x)))
+        self.trace = {"p_close": [round(float(q), 3) for q in p], "conf": [self.conf["cove_gone"], self.conf["cam4b"]], "swallowed": sw[1] if sw else None}
+        # the Supervisor's camera verdicts still close (live 2026-10-05 N3 round 3: the fly saw 4B = 1.0 on 4 flips running, the
+        # sim-trained W never closes R on 4B alone, threat_close_R was swallowed each time and Chica got in). A threat close with a hall
+        # reading is the hall path: the readout owns that one (it waits LOOK_MIN_S). Reopens stay the readout's.
+        if sw and sw[1] in PASS_CLOSES and (sw[1] == "foxy_close" or s.hall[sw[1][-1]] is None):
+            return self._emit(*sw, t)
         if d.action != Action.NONE or d.reason in ("untrusted_wait", "settle") or s.monitor_up:
             return d
-        want = self.targets(x)
         cand = [(m, side) for side, (w, m) in want.items() if w != bool(s.door_closed[side]) and not self.jammed[side]]
         if not cand:
             return d

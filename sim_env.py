@@ -26,7 +26,8 @@ SIDE = {"bonnie": "L", "chica": "R"}
 # measured with scripts/fly_danger_corpus.py on n2_a
 NOISE = {"hit": 0.98, "false_alarm": 0.002, "flicker": 0.12,
          "cove_hit": {2: 0.2, 3: 0.52, 4: 1.0}, "cove_false_alarm": 0.02,
-         "cam4b_hit": 0.95, "cam4b_false_alarm": 0.02}  # phase 39 fit: held-out hit 1.00 (16 Chica frames, 5 looks), 1.9% false alarms; rounded down  # cove: phase 34 held-out per-frame rates at the 2% threshold  # corpus n2_a: 86% of occupied lit frames >= 0.5 (14% flicker zeros), 0 false alarms on 61 empty lit frames
+         "cam4b_hit": 0.95, "cam4b_false_alarm": 0.02,
+         "gone_hit": 0.84, "gone_false_alarm": {1: 0.0, 2: 0.0, 3: 0.085}}  # gone: fit_cove_gone held-out per-frame rates 2026-10-05 (25 stage-4 frames, 5 looks)  # phase 39 fit: held-out hit 1.00 (16 Chica frames, 5 looks), 1.9% false alarms; rounded down  # cove: phase 34 held-out per-frame rates at the 2% threshold  # corpus n2_a: 86% of occupied lit frames >= 0.5 (14% flicker zeros), 0 false alarms on 61 empty lit frames
 
 
 def power_rates():
@@ -204,6 +205,13 @@ class Night:
         p = self.noise["cove_hit"].get(self.foxy, self.noise["cove_false_alarm"])
         return 0.95 if self.rng.random() < p else 0.05
 
+    def gone_obs(self):
+        """The fly's 'cove empty' score on cam 1C: hit while Foxy is running (stage 4), false alarms mostly at stage 3."""
+        if not (self.monitor and self.cam == "1C"):
+            return None
+        p = self.noise["gone_hit"] if self.foxy == 4 else self.noise["gone_false_alarm"].get(self.foxy, 0.0)
+        return 0.95 if self.rng.random() < p else 0.05
+
     def cam4b_obs(self):
         """The fly's 4B score: somebody (Chica / Freddy) standing on 4B."""
         if not (self.monitor and self.cam == "4B"):
@@ -221,7 +229,7 @@ class Night:
         lo = {s: (self.light[s] if vis and self.view == s else None) for s in "LR"}
         return Readings(self.t, hour=self.hour(), power_pct=float(round(self.power)), usage=self.usage(), monitor_up=self.monitor,
                         door_closed=dc, light_on=lo, cam=self.cam if self.monitor else None, cam_feat=self.cam_feat() if self.monitor else None,
-                        hall={s: self.danger(s) for s in "LR"}, cove=self.cove_obs(), cam4b=self.cam4b_obs())
+                        hall={s: self.danger(s) for s in "LR"}, cove=self.cove_obs(), cam4b=self.cam4b_obs(), cove_gone=self.gone_obs())
 
 
 def play(params=None, seed=0, noise=None, max_s=None, disable_doors=False, quiet=False, night=2, flips=True, policy="supervisor", trace=None, weights=None):

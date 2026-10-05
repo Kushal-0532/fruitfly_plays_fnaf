@@ -21,7 +21,7 @@ PARK_REF = (640, 360)      # reference px, no button hovered
 # State tracker (Phase 05)
 # door_closed never expires: only the bot changes doors and only one side is on screen at a time (live: the left door expired mid-hold and tripped safe mode)
 STALE_S = {"hour": 5, "power_pct": 5, "usage": 5, "monitor_up": 1, "door_closed": 1e9, "light_on": 120,
-           "cam": 2, "hall": 0.5, "foxy_stage": 8, "cove": 30, "cam4b": 15}  # s a None reading keeps the last good value
+           "cam": 2, "hall": 0.5, "foxy_stage": 8, "cove": 30, "cam4b": 15, "cove_gone": 30}  # s a None reading keeps the last good value
 FREEZE_S = 20          # s hour+power unchanged while frames arrive -> frozen_clock
 CAPTURE_STALL_S = 2    # s without frames -> capture_stall
 REQUIRED_FIELDS = ("hour", "power_pct", "monitor_up", "door_closed.L", "door_closed.R")
@@ -46,7 +46,7 @@ CONSERVE_MULT = 2.0
 ATTENTION = True           # fly-evidence-driven looking (attention.py); False = the old fixed hall-check timers
 STALL_FROM_NIGHT = 1       # U: stall flips (F26: Foxy fails every move while the monitor is up) from this night. 1: run c_n1_live was killed by Foxy at 5 AM on Night 1 (F22 says his AI is 0 there)
 STALL_PERIOD_S = {0: 10, 1: 8, 2: 7, 3: 6, 4: 6, 5: 6}  # U: s between monitor raises, by hour (phase 31 tunes)
-STALL_HOLD_S = 1.0         # s the monitor stays up after cam 1C shows (the fly's response lands in the log)
+STALL_HOLD_S = 1.0         # s the monitor stays up after cam 1C shows (the fly's response lands in the log); sim 2026-10-05: 1.4 doubled Foxy deaths
 STALL_CAM = "1C"
 LOOK_FAIL_S = 2.0          # s after a hall-check click with the light still not on = blocked look (retry once, then close that door)
 CAM_SAFE_S = 10.0          # s: a camera look needs both open halls seen empty this recently
@@ -91,13 +91,20 @@ COLLECT_PERIOD_S = 25.0     # U: --collect-cove: s between stall flips, so Foxy 
 COLLECT_HOLD_S = 2.0
 COVE_GAIN = 4.0              # U: |cam picture - stage-1 reference| amplification for the fly's cam-1C input (phase 34)
 COVE_THRESH = 0.86          # U: cove score that counts as "Foxy is out" (fit_cove writes the fitted threshold into data/templates/fly_cove.npz; main loads it)
+CAM_SETTLE_S = 0.6          # s after a camera switch before its fly scores count (live: the first frames of a look are static / the old view)
+COVE_GONE_THRESH = 0.27       # cove_gone score that counts as "the cove is empty" (fit_cove_gone writes the fitted one; main loads it)
+FLIP_VERDICTS = 3             # a stall flip stays on its camera until the fly gave this many new settled verdicts ...
+FLIP_MAX_S = 2.5              # ... or this long after the camera showed
+CLICK_SETTLE = 0.15           # s before pressing when nothing pans: camera-map buttons, or the button the pointer already rests on
+CLOSED_LIGHT_S = 3.0          # s a light may stay on over a closed door before light_off; sim N3: 3 s beat 6 s (406 vs 349 s mean). ponytail: < MIN_HOLD_S, so the lit-hold reopen_empty path is dormant; raise above MIN_HOLD_S if window-watch reopens prove worth it live
+PEEK_WATCH_S = 60.0           # U: after the fly saw Foxy out of his curtain (stage 2-3), stall flips look at the cove, twice as often, this long
 COVE_CONFIRM = 2            # U: consecutive frames at/above the threshold before the supervisor acts
 FOXY_OUT_FLIP_MULT = 0.5    # U: stall flips come twice as often while Foxy is loose
 JAM_CONFIRM = 2             # consecutive dark hall-check looks before a side counts as jammed (F24)
 COVE_CLEAR_CONFIRM = 5       # U: consecutive low-cove frames on a later 1C look before reopening the left door (run 225159: 1-frame reopen dithered 10x)
 STALL_CAM_BY_NIGHT = {2: "1C", 3: "4B", 4: "4B", 5: "4B", 6: "4B"}  # phase 38
-COVE_LOOK_EVERY = 3         # U: night >= 3: every 3rd flip looks at the cove (only with the right door shut) so Foxy stays under the fly's eye
+COVE_LOOK_EVERY = 2         # U: night >= 3: every 2nd flip looks at the cove (live 2026-10-05: every 3rd + the gate below left Foxy unwatched 75 s, 3 Foxy deaths)
 CAM_SAFE_BY_NIGHT = {n: {"R": 5.0} for n in (3, 4, 5, 6)}  # U: per side, s a hall must have been seen clear before a flip (an all-sides 5 s window never fits: sim livelock). Night 3 rounds 1-2 (runs 231259, 231825): Chica killed within 1 s of lowering the monitor after a 4B flip
 CAM4B_THRESH = 0.86         # U: cam4b score that counts as "somebody is on 4B" (fit_cove(cam="4B") writes the fitted one into data/templates/fly_cam4b.npz)
 CAM4B_CONFIRM = 2           # U: consecutive frames before the supervisor acts
-CAM4B_CLEAR_S = 15.0         # U: a cove flip on night 3+ is allowed if the fly saw 4B empty this recently (or the right door is shut)
+CAM4B_CLEAR_S = 30.0        # U: a cove flip on night 3+ is allowed if the fly saw 4B empty this recently (or the right door is shut, or Foxy is being watched)

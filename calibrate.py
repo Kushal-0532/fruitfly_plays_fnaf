@@ -9,6 +9,8 @@ from geometry import REQUIRED_BUTTONS, Geometry, Window, in_window, window_to_re
 
 DEFAULT_SIZE = (40, 40)  # reference px for single-hover buttons (doors, lights, cams)
 RECT_BUTTONS = {"monitor_bar", "hall_L", "hall_R", "clock", "power", "usage", "cam_map"}  # two corner hovers
+HINTS = {"hall_L": " (the left DOORWAY, where Bonnie stands)",
+         "hall_R": " (the right WINDOW beside the door, where Chica appears, NOT the doorway; view panned fully right)"}
 
 
 def build_calibration(samples, geom, base=None):
@@ -52,7 +54,7 @@ def main(argv=None):
         pts = []
         for corner in (["top-left", "bottom-right"] if name in RECT_BUTTONS else [""]):
             while True:
-                input(f"hover the pointer over {name} {corner} and press Enter ")
+                input(f"hover the pointer over {name}{HINTS.get(name, '')} {corner} and press Enter ")
                 p = _pointer_in_window(win)
                 if in_window(geom, *p, margin=0):
                     pts.append(p)

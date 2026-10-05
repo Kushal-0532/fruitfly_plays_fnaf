@@ -39,8 +39,17 @@ def test_untrusted_timer(tmp_path):
 
 def test_freeze_reasons(tmp_path):
     for r in ("frozen_clock", "capture_stall"):
-        d = guards(tmp_path).vet(make_state(trusted=False, reasons=[r]), NONE, 0)
+        g = guards(tmp_path)
+        g.vet(make_state(), NONE, 0)  # trusted once: stalls are real now
+        d = g.vet(make_state(trusted=False, reasons=[r]), NONE, 1)
         assert (d.action, d.reason) == (Action.SAFE_MODE, r)
+
+
+def test_startup_stall_tolerated(tmp_path):
+    g = guards(tmp_path)  # static night-start card: no frames yet, not a stall
+    assert g.vet(make_state(trusted=False, reasons=["capture_stall"]), NONE, 0).action != Action.SAFE_MODE
+    d = g.vet(make_state(trusted=False, reasons=["frozen_clock"]), NONE, 1)
+    assert d.reason == "frozen_clock"
 
 
 def run_door(g, state_fn, n):

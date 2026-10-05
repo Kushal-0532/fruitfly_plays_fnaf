@@ -27,6 +27,7 @@ class Actuator:
         self.wid, self.geom, self.buttons = str(wid), geom, buttons
         self._run, self._sleep, self._clock = run, sleep, clock
         self._last = None
+        self._at = None  # button the pointer rests on (set by click)
 
     def _xdo(self, *args):
         return self._run(["xdotool", *args], capture_output=True, text=True)
@@ -38,16 +39,22 @@ class Actuator:
         return str(px), str(py)
 
     def _move(self, rx, ry):
+        self._at = None
         self._xdo("mousemove", "--window", self.wid, *self._point(rx, ry))
 
     def _goto(self, name):
         pt = self._point(*center(self.buttons[name]))  # validate before any xdotool call
+        self._at = None
         self._xdo("windowactivate", "--sync", self.wid)
         self._xdo("mousemove", "--window", self.wid, *pt)
 
     def click(self, name):
+        # the office view pans with the pointer; the camera map does not, and a button the pointer already rests on (light_off after
+        # hall_check) is where it was: no second PAN_SETTLE (it kept lights and the monitor on ~1 s longer per look, live 2026-10-05)
+        still = name.startswith("cam_") or name == self._at
         self._goto(name)
-        self._sleep(config.PAN_SETTLE)
+        self._at = name
+        self._sleep(config.CLICK_SETTLE if still else config.PAN_SETTLE)
         self._xdo("mousedown", "1")
         self._sleep(config.CLICK_HOLD)
         self._xdo("mouseup", "1")
