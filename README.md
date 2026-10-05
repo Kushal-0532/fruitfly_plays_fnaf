@@ -11,6 +11,8 @@ door decisions. 6 AM arrived about 7 seconds after the power ran out.
 
 [![Demo: a fruit fly brain plays Five Nights at Freddy's](https://img.youtube.com/vi/fRMy38bjCZA/maxresdefault.jpg)](https://www.youtube.com/watch?v=fRMy38bjCZA)
 
+Click thumbnail to watch demo on youtube ^
+
 > Honest scope: the fly model does early vision only (photoreceptors to motion detectors). It is not a whole fly brain, it is never
 > retrained on the game, and ordinary code still decides *when to look* and keeps the bot safe. What the fly owns is **seeing** and
 > the **door verdicts**: no door is ever clicked without a fly score behind it (see [Who decides what](#who-decides-what)).
